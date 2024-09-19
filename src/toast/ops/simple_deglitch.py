@@ -7,7 +7,7 @@ import copy
 import numpy as np
 import traitlets
 from astropy import units as u
-from scipy.signal import medfilt
+from scipy.ndimage import median_filter
 
 from .. import qarray as qa
 from ..intervals import IntervalList
@@ -95,6 +95,21 @@ class SimpleDeglitch(Operator):
         "or a positive odd number",
     )
 
+    medfilt_boundary = Unicode(
+        'mirror',
+        help="Determines how the input array is extended beyond its boundaries"
+        "when running median filter. For all possible behavior see"
+        "the `mode` option in scipy.ndimage.median_filter function.",
+    )
+
+    medfilt_shift = Int(
+        0,
+        help="Control the placement of the median filter kernel. A value 0"
+        "would center the filter over the time stamp, with positive values"
+        "shifting the filter to the left/forward, and negative ones to the"
+        "right/backward.",
+    )
+
     fill_gaps = Bool(
         True,
         help="Fill gaps with a trend line and white noise",
@@ -164,15 +179,14 @@ class SimpleDeglitch(Operator):
                 for iview, view in enumerate(views):
                     nsample = view.last - view.first + 1
                     ind = slice(view.first, view.last + 1)
-                    sig_view = sig[ind].copy()
-                    w = self.medfilt_kernel_size
-                    if w > 0 and nsample > 2 * w:
-                        # Remove the running median
-                        sig_view[w:-w] -= medfilt(sig_view, kernel_size=w)[w:-w]
-                        # Special treatment for the ends
-                        sig_view[:w] -= np.median(sig_view[:w])
-                        sig_view[-w:] -= np.median(sig_view[-w:])
-                    trend = sig[ind] - sig_view
+                    trend = median_filter(
+                        input=sig[ind],
+                        size=self.medfilt_kernel_size,
+                        mode=self.medfilt_boundary,
+                        origin=self.medfilt_shift,
+                        axes=-1
+                    )
+                    sig_view = sig[ind] - trend
                     sig_view[bad[ind]] = np.nan
                     offset = np.nanmedian(sig_view)
                     sig_view -= offset
