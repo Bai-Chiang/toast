@@ -375,6 +375,7 @@ class JumpGlitchDetector(Operator):
                         sig_view[1:-1] - 0.5*sig_view[0:-2] - 0.5*sig_view[2:]
 
                     trend = median_filter(sig_view, size=self.medfilt_kernel_size, mode='mirror')
+                    offset = sig_view - trend
 
                     # diff[i] = sig[i] - sig[i-1]
                     # Use derivative on `trend` to find jumps.
@@ -411,6 +412,9 @@ class JumpGlitchDetector(Operator):
                     peak[-1] = peak_stats[0]
 
                     sharp_anomy = self._is_significant(peak, peak_stats, self.nsigma_sharp_detection)
+
+                    offset_stats = self._get_stats(offset, nsigma=nsigma_range)
+                    sharp_anomy &= self._is_significant(offset, offset_stats, self.nsigma_sharp_detection)
 
                     diff_trend_stats = self._get_stats(diff_trend, nsigma=nsigma_range)
 
@@ -495,9 +499,7 @@ class JumpGlitchDetector(Operator):
                         glitch_slc = []
                         glitch_sample = []
                         glitch_nsigma = []
-                        offset = sig_view - trend
-                        offset[sharp_anomy] = np.nan
-                        white_noise_sigma = np.nanstd(offset)
+                        white_noise_sigma = np.std(offset[np.logical_not(sharp_anomy)])
 
 
                     nanomy = 0
@@ -596,7 +598,10 @@ class JumpGlitchDetector(Operator):
                                     peak_slc = peak[slc]
                                     peak_value = peak_slc[np.argmax(np.abs(peak_slc - peak_stats[0]))]
                                     glitch_nsigma.append(
-                                        self._get_significance(peak_value, peak_stats)
+                                        max(
+                                            self._get_significance(peak_value, peak_stats),
+                                            self._get_significance(glitch_mag[-1],offset_stats)
+                                            )
                                         )
                             else:
                                 # Not jump also no glitch, it's possible this is due to point source of transient signal
