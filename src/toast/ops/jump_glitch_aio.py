@@ -499,7 +499,7 @@ class JumpGlitchDetector(Operator):
                         glitch_slc = []
                         glitch_sample = []
                         glitch_nsigma = []
-                        white_noise_sigma = np.std(offset[np.logical_not(sharp_anomy)])
+                        white_noise_sigma = np.std(offset[np.logical_not(all_anomy)])
 
 
                     nanomy = 0
