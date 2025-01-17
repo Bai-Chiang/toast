@@ -367,6 +367,16 @@ class JumpGlitchDetector(Operator):
 
                     #assert nsample > self.nsample_min   # TODO
 
+                    ##############################################################
+                    # TMP FIX
+                    ##############################################################
+                    if np.ptp(sig_view) > 100:
+                        ob._detflags[name] |= self.det_mask
+                        det_flags[ind] |= self.det_flag_mask
+                        continue
+                    ##############################################################
+                    # TMP FIX
+                    ##############################################################
 
                     # peak[i] = sig[i] - ( sig[i-1] + sig[i+1] ) / 2
                     # is good at finding glitches even with HWPSS
