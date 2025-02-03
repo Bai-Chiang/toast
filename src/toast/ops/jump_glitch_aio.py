@@ -511,6 +511,11 @@ class JumpGlitchDetector(Operator):
                         glitch_nsigma = []
                         white_noise_sigma = np.std(offset[np.logical_not(all_anomy)])
 
+                        # Get_bias_line
+                        det_data = ob.telescope.focalplane.detector_data
+                        i = np.flatnonzero(det_data['name'] == readout_id)[0]
+                        bias_line =  det_data[i]['det_info:wafer:bias_line']
+
 
                     nanomy = 0
                     for i_anomy in range(len(anomy_slc)):
@@ -658,6 +663,7 @@ class JumpGlitchDetector(Operator):
                                 ob_length=ob_length,
                                 det_id=det_id,
                                 white_noise_sigma=white_noise_sigma,
+                                bias_line=bias_line,
                                 )
 
                         njump = jump_interval.size
