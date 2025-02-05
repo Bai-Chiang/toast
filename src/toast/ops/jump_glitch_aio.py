@@ -345,7 +345,8 @@ class JumpGlitchDetector(Operator):
                 if self.stats_dir is not None:
                     detector_data = ob.telescope.focalplane.detector_data
                     det_id = detector_data[np.flatnonzero(detector_data['name'] == name)]['det_info:det_id'][0]
-                    ob_length = ob.shared['times'][-1] - ob.shared['times'][0],
+                    ob_start = ob.shared['times'][0]
+                    ob_length = ob.shared['times'][-1] - ob.shared['times'][0]
                     plots_dir = stats_dir/'plots'/ob.name
                     plots_dir.mkdir(parents=True, exist_ok=True)
 
@@ -515,6 +516,7 @@ class JumpGlitchDetector(Operator):
                         det_data = ob.telescope.focalplane.detector_data
                         i = np.flatnonzero(det_data['name'] == readout_id)[0]
                         bias_line =  det_data[i]['det_info:wafer:bias_line']
+                        wafer =  det_data[i]['det_info:wafer:array']
 
 
                     nanomy = 0
@@ -660,10 +662,12 @@ class JumpGlitchDetector(Operator):
                                 glitch_slc=glitch_slc,
                                 glitch_sample=glitch_sample,
                                 glitch_sample_len=glitch_sample_len,
+                                ob_start=ob_start,
                                 ob_length=ob_length,
                                 det_id=det_id,
                                 white_noise_sigma=white_noise_sigma,
                                 bias_line=bias_line,
+                                wafer=np.array(wafer),
                                 )
 
                         njump = jump_interval.size
