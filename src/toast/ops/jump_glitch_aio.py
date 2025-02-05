@@ -517,6 +517,7 @@ class JumpGlitchDetector(Operator):
                         i = np.flatnonzero(det_data['name'] == readout_id)[0]
                         bias_line =  det_data[i]['det_info:wafer:bias_line']
                         wafer =  det_data[i]['det_info:wafer:array']
+                        n_det_bias_line = np.sum(det_data['det_info:wafer:bias_line'] == bias_line)
 
 
                     nanomy = 0
@@ -668,6 +669,7 @@ class JumpGlitchDetector(Operator):
                                 white_noise_sigma=white_noise_sigma,
                                 bias_line=bias_line,
                                 wafer=np.array(wafer),
+                                n_det_bias_line=n_det_bias_line,
                                 )
 
                         njump = jump_interval.size
