@@ -341,7 +341,9 @@ class JumpGlitchDetector(Operator):
 
             local_dets = ob.select_local_detectors(flagmask=self.det_mask)
             shared_flags = ob.shared[self.shared_flags].data & self.shared_flag_mask
+            print('init')
             for name in local_dets:
+                print('part 1')
                 if self.stats_dir is not None:
                     detector_data = ob.telescope.focalplane.detector_data
                     det_id = detector_data[np.flatnonzero(detector_data['name'] == name)]['det_info:det_id'][0]
@@ -514,12 +516,13 @@ class JumpGlitchDetector(Operator):
 
                         # Get_bias_line
                         det_data = ob.telescope.focalplane.detector_data
-                        i = np.flatnonzero(det_data['name'] == readout_id)[0]
+                        i = np.flatnonzero(det_data['name'] == name)[0]
                         bias_line =  det_data[i]['det_info:wafer:bias_line']
                         wafer =  det_data[i]['det_info:wafer:array']
                         n_det_bias_line = np.sum(det_data['det_info:wafer:bias_line'] == bias_line)
 
 
+                    print('part 2')
                     nanomy = 0
                     for i_anomy in range(len(anomy_slc)):
                         if nanomy > self.nanomy_limit:
@@ -626,6 +629,7 @@ class JumpGlitchDetector(Operator):
                                 # on the sky.
                                 pass
 
+                    print('part 3')
                     if nanomy > self.nanomy_limit:
                         # Too many anomalies flag the entire detector
                         ob._detflags[name] |= self.det_mask
@@ -635,6 +639,7 @@ class JumpGlitchDetector(Operator):
                     det_flags[ind][glitch_flags] |= self.glitch_mask
 
 
+                    print('part 4')
                     # Only wirte file if there is a jump or glitch detected
                     if self.stats_dir is not None \
                             and (len(jump_mag) != 0 or len(glitch_mag) != 0):
@@ -672,6 +677,7 @@ class JumpGlitchDetector(Operator):
                                 n_det_bias_line=n_det_bias_line,
                                 )
 
+                        print('part 5')
                         njump = jump_interval.size
                         if njump > 0:
                             # plot jumps
