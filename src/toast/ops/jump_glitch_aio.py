@@ -155,6 +155,16 @@ class JumpGlitchDetector(Operator):
         help="Number of samples around flagged region when ploting",
     )
 
+    plot_marker = Unicode(
+        "None",
+        help="Markers when ploting",
+    )
+
+    plot_linestyle = Unicode(
+        "solid",
+        help="linestyle when ploting",
+    )
+
     @traitlets.validate("det_mask")
     def _check_det_mask(self, proposal):
         check = proposal["value"]
@@ -712,13 +722,14 @@ class JumpGlitchDetector(Operator):
                                 ax_sig = fig.add_subplot(sgs[0])
                                 slc = jump_slc[i]
                                 ax_sig.plot(
-                                        ob.shared['times'][slc],
-                                        sig_view[slc],
-                                    '-',
+                                    ob.shared['times'][slc],
+                                    sig_view[slc],
+                                    marker=self.plot_marker,
+                                    linestyle=self.plot_linestyle,
                                 )
                                 ax_sig.plot(
-                                        ob.shared['times'][slc],
-                                        trend[slc],
+                                    ob.shared['times'][slc],
+                                    trend[slc],
                                     '--',
                                 )
                                 label = 'jump mag: {:.5f}  '.format(jump_mag[i])
@@ -786,13 +797,14 @@ class JumpGlitchDetector(Operator):
                                 ax_sig = fig.add_subplot(sgs[0])
                                 slc = glitch_slc[i]
                                 ax_sig.plot(
-                                        ob.shared['times'][slc],
-                                        sig_view[slc],
-                                    '-',
+                                    ob.shared['times'][slc],
+                                    sig_view[slc],
+                                    marker=self.plot_marker,
+                                    linestyle=self.plot_linestyle,
                                 )
                                 ax_sig.plot(
-                                        ob.shared['times'][slc],
-                                        trend[slc],
+                                    ob.shared['times'][slc],
+                                    trend[slc],
                                     '--',
                                 )
                                 ax_flag.plot(
