@@ -2,13 +2,14 @@
 name:  Binary Wheels
 
 on:
-  workflow_dispatch:
+  # workflow_dispatch:
   # FIXME:  Remove these lines once this workflow merged
   # to main branch.
   # pull_request:
   #   branches:
   #     - toast3
-  # Remove tags stanza after we are doing releases from main.
+  # FIXME:  Remove tags stanza after we are doing releases
+  # from main, and restore release stanza.
   push:
     tags:
       - '*'
@@ -160,12 +161,16 @@ jobs:
           name: toast-cp${{ matrix.python }}-${{ matrix.builder }}_${{ matrix.arch }}
           path: ./wheelhouse/toast*cp${{ matrix.python }}-${{ matrix.builder }}*${{ matrix.arch }}*.whl
 
+  # FIXME: before merge to main, comment out this whole block when
+  # testing without upload.
   upload_pypi:
     needs: build_wheels
     runs-on: ubuntu-latest
     permissions:
       id-token: write
-    if: github.event_name == 'release' && github.event.action == 'published'
+    # FIXME: restore release / published conditional here after merge
+    # to main.
+    # if: github.event_name == 'release' && github.event.action == 'published'
     steps:
       - uses: actions/download-artifact@v4
         with:
