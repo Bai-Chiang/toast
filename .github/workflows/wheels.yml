@@ -8,8 +8,12 @@ on:
   # pull_request:
   #   branches:
   #     - toast3
-  release:
-    types: [ published ]
+  # Remove tags stanza after we are doing releases from main.
+  push:
+    tags:
+      - '*'
+  # release:
+  #   types: [ published ]
 
 
 concurrency:
