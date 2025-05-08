@@ -171,6 +171,24 @@ class IntervalTest(MPITestCase):
             included[ival.first : ival.last] += 1
         assert np.all(included == 1)
 
+    def test_closed_time_spans(self):
+        n_samp = 100
+        n_intr = 10
+        stamps = 1000.0 * np.arange(n_samp, dtype=np.float64)
+
+        # Sample ranges are open ended
+        samplespans = [(x * n_intr, x * n_intr + n_intr) for x in range(n_intr)]
+        intr_samples = IntervalList(stamps, samplespans=samplespans)
+
+        # Time ranges are open ended *unless* the end time coincides
+        # with the observation end time.
+        timespans = [
+            (stamps[x[0]], stamps[min(x[1], stamps.size - 1)]) for x in samplespans
+        ]
+        intr_times = IntervalList(stamps, timespans=timespans)
+
+        self.assertTrue(intr_samples == intr_times)
+
     # def test_tochunks(self):
     #     intrvls = regular_intervals(
     #         self.nint, self.start, self.first, self.rate, self.duration, self.gap
