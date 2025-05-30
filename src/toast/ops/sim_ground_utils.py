@@ -235,13 +235,22 @@ def oscillate_el(
         angular_rate = 2 * np.pi * el_mod_rate
         el += el_mod_amplitude * np.sin(tt * angular_rate)
 
-        # Check that we did not breach tolerances
-        el_rate_max = np.amax(np.abs(np.diff(el)) / np.diff(tt))
-        if np.any(el_rate_max > el_rate):
+        # Check that we did not breach tolerances 
+        # (simple harmonic motion derivatives)
+        el_rate_max = angular_rate * el_mod_amplitude 
+        el_accel_max = angular_rate**2 * el_mod_amplitude
+        if el_rate_max > el_rate:
             raise RuntimeError(
                 "Elevation oscillation requires {:.2f} deg/s but "
                 "mount only allows {:.2f} deg/s".format(
                     np.degrees(el_rate_max), np.degrees(el_rate)
+                )
+            )
+        if el_accel_max > el_accel:
+            raise RuntimeError(
+                "Elevation oscillation requires {:.2f} deg/s^2 but "
+                "mount only allows {:.2f} deg/s^2".format(
+                    np.degrees(el_accel_max), np.degrees(el_accel)
                 )
             )
     else:
