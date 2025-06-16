@@ -132,7 +132,8 @@ class ScanHealpixDetectorMap(Operator):
         props = {}
         for key in self.focalplane_keys.split(","):
             if key not in focalplane.detector_data.keys():
-                msg = f"{key} is not in the focalplane during {ob.name}"
+                msg = f"{key} is not in the focalplane during {ob.name}." \
+                    + "Valid keys are: {}".format(focalplane.detector_data.keys())
                 raise KeyError(msg)
             value = focalplane[det][key]
             props[key] = value
