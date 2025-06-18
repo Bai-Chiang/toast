@@ -1,4 +1,4 @@
-# Copyright (c) 2015-2020 by the parties listed in the AUTHORS file.
+# Copyright (c) 2015-2025 by the parties listed in the AUTHORS file.
 # All rights reserved.  Use of this source code is governed by
 # a BSD-style license that can be found in the LICENSE file.
 
@@ -8,7 +8,6 @@ from astropy import units as u
 
 from ..observation import default_values as defaults
 from ..pixels import PixelData, PixelDistribution
-from ..pixels_io_wcs import read_wcs_fits
 from ..timing import function_timer
 from ..traits import Bool, Instance, Int, Unicode, Unit, trait_docs
 from ..utils import Logger
@@ -32,7 +31,7 @@ class ScanWCSMap(Operator):
 
     API = Int(0, help="Internal interface version for this operator")
 
-    file = Unicode(None, allow_none=True, help="Path to FITS file")
+    file = Unicode(None, allow_none=True, help="Path to FITS or HDF5 file")
 
     det_data = Unicode(
         defaults.det_data, help="Observation detdata key for accumulating output"
@@ -123,9 +122,10 @@ class ScanWCSMap(Operator):
     def _exec(self, data, detectors=None, **kwargs):
         log = Logger.get()
 
-        # Check that the file is set
-        if self.file is None:
-            raise RuntimeError("You must set the file trait before calling exec()")
+        for trait in ("file", "pixel_pointing", "stokes_weights"):
+            if getattr(self, trait) is None:
+                msg = f"You must set the '{trait}' trait before calling exec()"
+                raise RuntimeError(msg)
 
         # Construct the pointing distribution if it does not already exist
 
@@ -141,16 +141,7 @@ class ScanWCSMap(Operator):
         if not isinstance(dist, PixelDistribution):
             raise RuntimeError("The pixel_dist must be a PixelDistribution instance")
 
-        # Use the pixel odistribution and pointing configuration to allocate our
-        # map data and read it in.
-        nnz = None
-        if self.stokes_weights is None or self.stokes_weights.mode == "I":
-            nnz = 1
-        elif self.stokes_weights.mode == "IQU":
-            nnz = 3
-        else:
-            msg = "Unknown Stokes weights mode '{}'".format(self.stokes_weights.mode)
-            raise RuntimeError(msg)
+        nnz = len(self.stokes_weights.mode)
 
         # Create our map to scan named after our own operator name.  Generally the
         # files on disk are stored as float32, but even if not there is no real benefit
@@ -160,7 +151,7 @@ class ScanWCSMap(Operator):
             data[self.map_name] = PixelData(
                 dist, dtype=np.float32, n_value=nnz, units=self.det_data_units
             )
-            read_wcs_fits(data[self.map_name], self.file)
+            data[self.map_name].read(self.file)
 
         # The pipeline below will run one detector at a time in case we are computing
         # pointing.  Make sure that our full set of requested detector output exists.
@@ -325,7 +316,7 @@ class ScanWCSMask(Operator):
         # timestreams.
         if self.mask_name not in data:
             data[self.mask_name] = PixelData(dist, dtype=np.uint8, n_value=1)
-            read_wcs_fits(data[self.mask_name], self.file)
+            data[self.mask_name].read(self.file)
 
         # The pipeline below will run one detector at a time in case we are computing
         # pointing.  Make sure that our full set of requested detector output exists.

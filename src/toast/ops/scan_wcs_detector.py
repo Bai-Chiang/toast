@@ -4,15 +4,12 @@
 
 import os
 
-import healpy as hp
 import numpy as np
-import toast.qarray as qa
 import traitlets
 from astropy import units as u
-from pshmem import MPIShared
 
 from ..observation import default_values as defaults
-from ..pixels_io_healpix import read_healpix
+from ..pixels_io_wcs import read_wcs
 from ..timing import function_timer
 from ..traits import Bool, Instance, Int, Unicode, Unit, trait_docs
 from ..utils import Logger
@@ -20,16 +17,12 @@ from .operator import Operator
 
 
 @trait_docs
-class ScanHealpixDetectorMap(Operator):
-    """Operator which reads a HEALPix format map from disk and scans it
-    to a timestream.
+class ScanWCSDetectorMap(Operator):
+    """Operator which reads a WCS format map from disk and scans it to a timestream.
 
-    Detectors can be matched to different input maps through the use of
-    detector attributes such as pixel, wafer or optics tube.
-
-    Each process loads and discards maps independently which may incur
-    significant memory overhead.  At most one map per process is kept
-    in memory.
+    The map file is loaded and distributed among the processes.  For each observation,
+    the pointing model is used to expand the pointing and scan the map values into
+    detector data.
 
     """
 
@@ -40,15 +33,13 @@ class ScanHealpixDetectorMap(Operator):
     file = Unicode(
         None,
         allow_none=True,
-        help="Path to healpix FITS file.  Use ';' if providing multiple files.  "
+        help="Path to WCS FITS or HDF5 file.  Use ';' if providing multiple files.  "
         "Any focalplane key listed in `focalplane_keys` can be used here and even "
         "formatted. For example: {psi_pol:.0f}",
     )
 
     det_data = Unicode(
-        defaults.det_data,
-        help="Observation detdata key for accumulating output.  Use ';' if different "
-        "files are applied to different flavors",
+        defaults.det_data, help="Observation detdata key for accumulating output"
     )
 
     det_data_units = Unit(
@@ -132,8 +123,7 @@ class ScanHealpixDetectorMap(Operator):
         props = {}
         for key in self.focalplane_keys.split(","):
             if key not in focalplane.detector_data.keys():
-                msg = f"{key} is not in the focalplane during {ob.name}." \
-                    + "Valid keys are: {}".format(focalplane.detector_data.keys())
+                msg = f"{key} is not in the focalplane during {ob.name}"
                 raise KeyError(msg)
             value = focalplane[det][key]
             props[key] = value
@@ -141,6 +131,34 @@ class ScanHealpixDetectorMap(Operator):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.map_name = "{}_map".format(self.name)
+
+    @function_timer
+    def _get_map(self, filename, wcs_shape, nnz):
+        if filename != self.current_filename:
+            # Load a new map
+            if not os.path.isfile(filename):
+                msg = f"No such file: {filename}"
+                raise FileNotFoundError(msg)
+            # read_wcs() returns a 3D row-major map
+            self.current_map = read_wcs(filename, dtype=np.float32)
+            # Check for consistency
+            map_nnz = self.current_map.shape[0]
+            if map_nnz != nnz:
+                msg = f"Component mismatch: "
+                msg += f"NNZ({self.stokes_weights.name})={nnz} but "
+                msg += f"NNZ({filename})={map_nnz}"
+                raise ValueError(msg)
+            current_shape = self.current_map.shape[1:]
+            if current_shape != wcs_shape:
+                msg = f"Pixelization mismatch: "
+                msg += f"Shape({self.pixel_pointing.name})={wcs_shape} but "
+                msg += f"Shape({filename})={current_shape}"
+                raise ValueError(msg)
+            # Flatten each component map
+            self.current_map = self.current_map.reshape([nnz, -1])
+            self.current_filename = filename
+        return self.current_map
 
     @function_timer
     def _exec(self, data, detectors=None, **kwargs):
@@ -151,34 +169,25 @@ class ScanHealpixDetectorMap(Operator):
                 msg = f"You must set the '{trait}' trait before calling exec()"
                 raise RuntimeError(msg)
 
-        # Split up the file and map names
-        self.file_names = self.file.split(";")
-        nmap = len(self.file_names)
-        self.det_data_keys = self.det_data.split(";")
-        nkey = len(self.det_data_keys)
-        if nkey != 1 and (nmap != nkey):
-            msg = "If multiple detdata keys are provided, each must have its own map"
-            raise RuntimeError(msg)
-
-        # Determine the number of non-zeros from the Stokes weights
         nnz = len(self.stokes_weights.mode)
+        wcs = None
+        wcs_shape = None
 
         # Loop over all observations and local detectors, sampling the appropriate maps
-        last_file_name = None
-        current_map = None
+        self.current_filename = None
         for ob in data.obs:
             # Get the detectors we are using for this observation
             dets = ob.select_local_detectors(detectors, flagmask=self.det_mask)
             if len(dets) == 0:
                 # Nothing to do for this observation
                 continue
-            for key in self.det_data_keys:
-                # If our output detector data does not yet exist, create it
-                exists_data = ob.detdata.ensure(
-                    key, detectors=dets, create_units=self.det_data_units
-                )
-                if self.zero:
-                    ob.detdata[key][:] = 0
+            # If our output detector data does not yet exist, create it
+            key = self.det_data
+            exists_data = ob.detdata.ensure(
+                key, detectors=dets, create_units=self.det_data_units
+            )
+            if self.zero:
+                ob.detdata[key][:] = 0
 
             ob_data = data.select(obs_name=ob.name)
             current_ob = ob_data.obs[0]
@@ -186,57 +195,29 @@ class ScanHealpixDetectorMap(Operator):
                 detector_properties = self._get_properties(ob, det)
                 # Get pointing
                 self.pixel_pointing.apply(ob_data, detectors=[det])
+                if wcs is None:
+                    # WCS is not available until the pixel pointing
+                    # operator is executed at least once
+                    wcs = self.pixel_pointing.wcs
+                    wcs_shape = self.pixel_pointing.wcs_shape
                 self.stokes_weights.apply(ob_data, detectors=[det])
                 pix = current_ob.detdata[self.pixel_pointing.pixels][det]
-                nest = self.pixel_pointing.nest
-                nside = self.pixel_pointing.nside
                 # Get pointing weights
                 weights = current_ob.detdata[self.stokes_weights.weights][det].T.copy()
 
                 # Load and sample the provided maps
-                for imap, file_name in enumerate(self.file_names):
-                    current_file_name = file_name.format(**detector_properties)
-                    if current_file_name != last_file_name:
-                        # Load a new map
-                        if not os.path.isfile(current_file_name):
-                            msg = f"No such file: {current_file_name}"
-                            raise FileNotFoundError(msg)
-                        current_map = np.atleast_2d(
-                            read_healpix(
-                                current_file_name,
-                                None,
-                                nest=nest,
-                                dtype=np.float32,
-                                verbose=False,
-                            )
-                        )
-                        nside_map = hp.get_nside(current_map)
-                        if nside_map != nside:
-                            msg = f"Resolution mismatch: "
-                            msg += f"NSide({self.pixel_pointing.name})={nside} but "
-                            msg += f"NSide({current_file_name})={nside_map}"
-                            raise ValueError(msg)
-                        last_file_name = current_file_name
-                    if len(self.det_data_keys) == 1:
-                        det_data_key = self.det_data_keys[0]
-                    else:
-                        det_data_key = self.det_data_keys[imap]
-                    ref = ob.detdata[det_data_key][det]
-                    sig = np.zeros_like(ref)
-                    # Apply appropriate weights to each stokes component.
-                    # Will also work if weights are polarized but map is
-                    # intensity-only
-                    for i in range(nnz):
-                        sig += current_map[i][pix] * weights[i]
-                        if len(current_map) == 1:
-                            break
-                    if self.subtract:
-                        ref -= sig
-                    else:
-                        ref += sig
-
-        # Clean up
-        del current_map
+                file_name = self.file
+                detector_file_name = file_name.format(**detector_properties)
+                detector_map = self._get_map(detector_file_name, wcs_shape, nnz)
+                ref = ob.detdata[self.det_data][det]
+                sig = np.zeros_like(ref)
+                # Apply appropriate weights to each stokes component.
+                for i in range(nnz):
+                    sig += detector_map[i][pix] * weights[i]
+                if self.subtract:
+                    ref -= sig
+                else:
+                    ref += sig
 
         return
 
@@ -244,12 +225,12 @@ class ScanHealpixDetectorMap(Operator):
         return
 
     def _requires(self):
-        req = self.detector_pointing.requires()
+        req = self.pixel_pointing.requires()
         req.update(self.stokes_weights.requires())
         return req
 
     def _provides(self):
         prov = {"global": list(), "detdata": [self.det_data]}
         if self.save_map:
-            prov["global"] = self.map_names
+            prov["global"] = [self.map_name]
         return prov

@@ -16,8 +16,7 @@ from scipy.ndimage import gaussian_filter
 from ... import ops, rng
 from ...observation import default_values as defaults
 from ...pixels import PixelData
-from ...pixels_io_healpix import read_healpix_fits
-from ...pixels_io_wcs import read_wcs_fits
+from ...pixels_io_wcs import write_wcs
 
 
 def create_fake_healpix_file(
@@ -107,33 +106,22 @@ def create_fake_wcs_file(
 
     """
     # Image dimensions
-    lon_dim = wcs_shape[0]
-    lat_dim = wcs_shape[1]
+    n_row, n_col = wcs_shape
     # Get the smoothing kernel FWHM in terms of pixels
-    lon_res_deg = np.absolute(wcs.wcs.cdelt[0])
-    lat_res_deg = np.absolute(wcs.wcs.cdelt[1])
-    lon_fwhm = fwhm.to_value(u.degree) / lon_res_deg
+    lat_res_deg = np.absolute(wcs.wcs.cdelt[0])
+    lon_res_deg = np.absolute(wcs.wcs.cdelt[1])
     lat_fwhm = fwhm.to_value(u.degree) / lat_res_deg
+    lon_fwhm = fwhm.to_value(u.degree) / lon_res_deg
 
-    image_shape = (3, lat_dim, lon_dim)
+    image_shape = (3, n_row, n_col)
     image = np.zeros(image_shape, dtype=np.float64)
 
     np.random.seed(987654321)
     for imap, scale in enumerate([I_scale, Q_scale, U_scale]):
-        temp = np.random.normal(loc=0.0, scale=scale, size=(lat_dim, lon_dim))
+        temp = np.random.normal(loc=0.0, scale=scale, size=(n_row, n_col))
         image[imap, :, :] = gaussian_filter(temp, sigma=(lat_fwhm, lon_fwhm))
 
-    # Basic wcs header
-    header = wcs.to_header(relax=True)
-    # Add map dimensions
-    header["NAXIS"] = image.ndim
-    for i, n in enumerate(image.shape[::-1]):
-        header[f"NAXIS{i + 1}"] = n
-    # Add units
-    header["BUNIT"] = str(units)
-    hdus = af.HDUList([af.PrimaryHDU(image.astype(np.float32), header)])
-    hdus.writeto(out_file)
-    del hdus
+    write_wcs(out_file, image, wcs, units)
     del image
 
 
@@ -188,7 +176,7 @@ def create_fake_healpix_map(
     if comm is not None:
         comm.barrier()
     pix = PixelData(pixel_dist, np.float64, n_value=3, units=units)
-    read_healpix_fits(pix, out_file, nest=True)
+    pix.read(out_file)
     return pix
 
 
@@ -243,7 +231,7 @@ def create_fake_wcs_map(
     if comm is not None:
         comm.barrier()
     pix = PixelData(pixel_dist, np.float64, n_value=3, units=units)
-    read_wcs_fits(pix, out_file)
+    pix.read(out_file)
     return pix
 
 
@@ -637,5 +625,3 @@ def fetch_nominal_cmb_cls(out_file=None):
         c_ell = _parse_file(out_file)
 
     return c_ell
-
-

@@ -231,8 +231,10 @@ class PixelsWCS(Operator):
                 msg = f"PixelsWCS: when center is not specified, bounds required."
                 log.error(msg)
                 raise RuntimeError(msg)
-            mid_lon = 0.5 * (bounds_deg[1] + bounds_deg[0])
-            mid_lat = 0.5 * (bounds_deg[3] + bounds_deg[2])
+            lon_min, lon_max, lat_min, lat_max = bounds_deg
+
+            mid_lon = 0.5 * (lon_min + lon_max)
+            mid_lat = 0.5 * (lat_min + lat_max)
             crval = np.array([mid_lon, mid_lat], dtype=np.float64)
             # Either resolution or dimensions should be specified
             if res_deg is not None:
@@ -303,29 +305,35 @@ class PixelsWCS(Operator):
                 wcs.wcs.cdelt = np.array([-res_deg[0], res_deg[1]])
             else:
                 # Compute CDELT from the bounding box and image size.
+                lon_min, lon_max, lat_min, lat_max = bounds_deg
+                n_col, n_row = dims
                 wcs.wcs.cdelt = np.array(
                     [
-                        -(bounds_deg[1] - bounds_deg[0]) / dims[0],
-                        (bounds_deg[3] - bounds_deg[2]) / dims[1],
+                        -(lon_max - lon_min) / n_col,
+                        (lat_max - lat_min) / n_row,
                     ]
                 )
 
         # Compute shape of the projection
         if dims is not None:
-            wcs_shape = tuple(dims)
+            n_col, n_row = dims
+            wcs_shape = (n_row, n_col)
         else:
             # Compute from the bounding box corners
-            lower_left = wcs.wcs_world2pix(
-                np.array([[bounds_deg[0], bounds_deg[2]]]), 0
-            )[0]
-            upper_right = wcs.wcs_world2pix(
-                np.array([[bounds_deg[1], bounds_deg[3]]]), 0
-            )[0]
-            wcs_shape = tuple(np.round(np.abs(upper_right - lower_left)).astype(int))
+            lon_min, lon_max, lat_min, lat_max = bounds_deg
+            col_min, row_min = wcs.wcs_world2pix([[lon_min, lat_min]], 0)[0]
+            col_max, row_max = wcs.wcs_world2pix([[lon_max, lat_max]], 0)[0]
+            n_col = int(np.abs(col_max - col_min))
+            n_row = int(np.abs(row_max - row_min))
+            # Make sure the dimensions are even
+            n_col += n_col % 2
+            n_row += n_row % 2
+            wcs_shape = (n_row, n_col)
 
         # Set the reference pixel to the center of the projection
-        off = wcs.wcs_world2pix(crval.reshape((1, 2)), 0)[0]
-        wcs.wcs.crpix = 0.5 * np.array(wcs_shape, dtype=np.float64) + 0.5 + off
+        off = wcs.wcs_world2pix([crval], 0)[0]
+        c_row, c_col = 0.5 * np.array(wcs_shape, dtype=np.float64) + 0.5 + off
+        wcs.wcs.crpix = (c_col, c_row)
 
         return wcs, wcs_shape
 
@@ -368,14 +376,22 @@ class PixelsWCS(Operator):
             dims=dims,
         )
 
-        self.pix_lon = self.wcs_shape[0]
-        self.pix_lat = self.wcs_shape[1]
-        self._n_pix = self.pix_lon * self.pix_lat
+        self._shape_to_submaps()
+        self._done_wcs = True
+        return
+
+    @function_timer
+    def _shape_to_submaps(self):
+        self.n_row = self.wcs_shape[0]
+        self.n_col = self.wcs_shape[1]
+        if self.n_row < 1 or self.n_col < 1:
+            msg = f"The WCS has non-positive dimensions: {self.wcs_shape}"
+            raise RuntimeError(msg)
+        self._n_pix = self.n_row * self.n_col
         self._n_pix_submap = self._n_pix // self.submaps
         if self._n_pix_submap * self.submaps < self._n_pix:
             self._n_pix_submap += 1
         self._local_submaps = np.zeros(self.submaps, dtype=np.uint8)
-        self._done_wcs = True
         return
 
     @function_timer
@@ -390,11 +406,14 @@ class PixelsWCS(Operator):
             raise NotImplementedError("Only astropy conversion is currently supported")
 
         if self.fits_header is not None:
-            # with open(self.fits_header, "rb") as f:
-            #     header = af.Header.fromfile(f)
-            raise NotImplementedError(
-                "Initialization from a FITS header not yet finished"
-            )
+            with open(self.fits_header, "rb") as f:
+                header = af.Header.fromfile(f)
+                self.wcs = WCS(header=header)
+                n_row, n_col = self.wcs.array_shape
+                self.wcs_shape = (n_row, n_col)
+                self._shape_to_submaps()
+                self._done_wcs = True
+                self._done_auto = True
 
         if self.coord_frame == "AZEL":
             is_azimuth = True
@@ -402,15 +421,14 @@ class PixelsWCS(Operator):
             is_azimuth = False
 
         if self.auto_bounds and not self._done_auto:
-            # Pass through the boresight pointing for every observation and build
-            # the maximum extent of the detector field of view.
-            lonmax = -2 * np.pi * u.radian
-            lonmin = 2 * np.pi * u.radian
-            latmax = (-np.pi / 2) * u.radian
-            latmin = (np.pi / 2) * u.radian
-            for ob in data.obs:
+            # Pass through the boresight pointing for every observation
+            # and build the maximum extent of the detector field of
+            # view.
+            nobs = len(data.obs)
+            minmax = np.zeros([nobs, 4]) * u.rad  # lon_min, lon_max, lat_min, lat_max
+            for iob, ob in enumerate(data.obs):
                 # The scan range is computed collectively among the group.
-                lnmin, lnmax, ltmin, ltmax = scan_range_lonlat(
+                minmax[iob] = scan_range_lonlat(
                     ob,
                     self.detector_pointing.boresight,
                     flags=self.detector_pointing.shared_flags,
@@ -419,25 +437,28 @@ class PixelsWCS(Operator):
                     is_azimuth=is_azimuth,
                     center_offset=self.center_offset,
                 )
-                lonmin = min(lonmin, lnmin)
-                lonmax = max(lonmax, lnmax)
-                latmin = min(latmin, ltmin)
-                latmax = max(latmax, ltmax)
+            minmax = minmax.T
+            # Compact observations on both sides of the zero meridian
+            # can confuse this calculation. Use np.unwrap() to find
+            # the most compact longitude range.
+            lonmin = np.amin(np.unwrap(minmax[0]))
+            lonmax = np.amax(np.unwrap(minmax[1]))
+            if lonmax < lonmin:
+                lonmax += 2 * np.pi
+            latmin = np.amin(minmax[2])
+            latmax = np.amax(minmax[3])
             if data.comm.comm_world is not None:
-                lonlatmin = np.zeros(2, dtype=np.float64)
-                lonlatmax = np.zeros(2, dtype=np.float64)
-                lonlatmin[0] = lonmin.to_value(u.radian)
-                lonlatmin[1] = latmin.to_value(u.radian)
-                lonlatmax[0] = lonmax.to_value(u.radian)
-                lonlatmax[1] = latmax.to_value(u.radian)
-                all_lonlatmin = np.zeros(2, dtype=np.float64)
-                all_lonlatmax = np.zeros(2, dtype=np.float64)
-                data.comm.comm_world.Allreduce(lonlatmin, all_lonlatmin, op=MPI.MIN)
-                data.comm.comm_world.Allreduce(lonlatmax, all_lonlatmax, op=MPI.MAX)
-                lonmin = all_lonlatmin[0] * u.radian
-                latmin = all_lonlatmin[1] * u.radian
-                lonmax = all_lonlatmax[0] * u.radian
-                latmax = all_lonlatmax[1] * u.radian
+                # Zero meridian concern applies across processes
+                all_lonmin = data.comm.comm_world.allgather(lonmin.to_value(u.radian))
+                all_lonmax = data.comm.comm_world.allgather(lonmax.to_value(u.radian))
+                all_latmin = data.comm.comm_world.allgather(latmin.to_value(u.radian))
+                all_latmax = data.comm.comm_world.allgather(latmax.to_value(u.radian))
+                lonmin = np.amin(np.unwrap(all_lonmin)) * u.radian
+                lonmax = np.amax(np.unwrap(all_lonmax)) * u.radian
+                if lonmax < lonmin:
+                    lonmax += 2 * np.pi
+                latmin = np.amin(all_latmin) * u.radian
+                latmax = np.amax(all_latmax) * u.radian
             self.bounds = (
                 lonmin.to(u.degree),
                 lonmax.to(u.degree),
@@ -549,7 +570,9 @@ class PixelsWCS(Operator):
                 for vslice in view_slices:
                     # Timestream of detector quaternions
                     quats = ob.detdata[quats_name][det][vslice]
-                    view_samples = len(quats)
+
+                    # Useful shorthand for pixel view
+                    pixels = ob.detdata[self.pixels][det, vslice]
 
                     if center_lonlat is None:
                         center_offset = None
@@ -563,25 +586,23 @@ class PixelsWCS(Operator):
                         is_azimuth=is_azimuth,
                     )
 
+                    # Turn position relative to the center into row and column
                     world_in = np.column_stack([rel_lon, rel_lat])
-
                     rdpix = self.wcs.wcs_world2pix(world_in, 0)
-                    rdpix = np.array(np.around(rdpix), dtype=np.int64)
+                    col, row = np.array(np.around(rdpix), dtype=np.int64).T
 
-                    ob.detdata[self.pixels][det, vslice] = (
-                        rdpix[:, 0] * self.pix_lat + rdpix[:, 1]
-                    )
-                    bad_pointing = ob.detdata[self.pixels][det, vslice] >= self._n_pix
+                    # Turn row and column into flat pixel numbers assuming
+                    # row-major ordering
+                    pixels[:] = col + row * self.n_col
+                    bad_pointing = pixels >= self._n_pix
+
                     if flags is not None:
-                        bad_pointing = np.logical_or(bad_pointing, flags[vslice] != 0)
-                    (ob.detdata[self.pixels][det, vslice])[bad_pointing] = -1
+                        bad_pointing[flags[vslice] != 0] = True
+                    pixels[bad_pointing] = -1
 
                     if self.create_dist is not None:
-                        good = ob.detdata[self.pixels][det][vslice] >= 0
-                        self._local_submaps[
-                            (ob.detdata[self.pixels][det, vslice])[good]
-                            // self._n_pix_submap
-                        ] = 1
+                        good = pixels >= 0
+                        self._local_submaps[pixels[good] // self._n_pix_submap] = 1
 
     def _finalize(self, data, **kwargs):
         if self.create_dist is not None:

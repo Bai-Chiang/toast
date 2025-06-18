@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2024 by the parties listed in the AUTHORS file.
+# Copyright (c) 2021-2025 by the parties listed in the AUTHORS file.
 # All rights reserved.  Use of this source code is governed by
 # a BSD-style license that can be found in the LICENSE file.
 
@@ -15,7 +15,7 @@ from .. import templates
 from ..data import Data
 from ..observation import Observation
 from ..observation import default_values as defaults
-from ..pixels_io_wcs import write_wcs_fits
+from ..pixels_io_wcs import write_wcs
 from ..vis import plot_wcs_maps, set_matplotlib_backend
 from .helpers import (
     close_data,
@@ -32,17 +32,25 @@ class PointingWCSTest(MPITestCase):
     def setUp(self):
         fixture_name = os.path.splitext(os.path.basename(__file__))[0]
         self.outdir = create_outdir(self.comm, subdir=fixture_name)
-        self.proj_dims = (1000, 500)
+        # Uncomment high resolution versions for prettier plots
+        # (tests take more time)
+        self.proj_dims = (100, 50)
+        self.reso = 1.0 * u.degree
+        self.fsample = 1.0 * u.Hz
+        # self.proj_dims = (1000, 500)
+        # self.reso = 0.02 * u.degree
+        # self.fsample = 60.0 * u.Hz
         # For debugging, change this to True
         self.write_extra = False
 
     def create_boresight_pointing(self, pixels):
         # Given a fixed (not auto) wcs spec, simulate boresight pointing
+        # that points at each pixel exactly once
         if pixels.auto_bounds:
             raise RuntimeError("Cannot use with auto bounds")
         pixels.set_wcs()
         wcs = pixels.wcs
-        nlon, nlat = pixels.wcs_shape
+        nrow, ncol = pixels.wcs_shape
 
         toastcomm = create_comm(self.comm)
         data = Data(toastcomm)
@@ -52,9 +60,9 @@ class PointingWCSTest(MPITestCase):
         )
 
         px = list()
-        for plon in range(nlon):
-            for plat in range(nlat):
-                px.append([plon, plat])
+        for row in range(nrow):
+            for col in range(ncol):
+                px.append([col, row])
         coord_deg = wcs.wcs_pix2world(np.array(px, dtype=np.float64), 0)
         coord = np.radians(coord_deg)
 
@@ -63,7 +71,7 @@ class PointingWCSTest(MPITestCase):
         theta = np.array(half_pi - coord[:, 1], dtype=np.float64)
         bore = qa.from_iso_angles(theta, phi, np.zeros_like(theta))
 
-        nsamp = nlon * nlat
+        nsamp = nrow * ncol
         ob = Observation(toastcomm, tele, n_samples=nsamp)
         ob.shared.create_column(defaults.boresight_radec, (nsamp, 4), dtype=np.float64)
         ob.shared.create_column(defaults.shared_flags, (nsamp,), dtype=np.uint8)
@@ -105,7 +113,7 @@ class PointingWCSTest(MPITestCase):
 
         if self.write_extra:
             outfile = os.path.join(self.outdir, f"{prefix}.fits")
-            write_wcs_fits(data[build_hits.hits], outfile)
+            write_wcs(data[build_hits.hits], outfile)
             if data.comm.world_rank == 0:
                 plot_wcs_maps(hitfile=outfile)
 
@@ -114,10 +122,7 @@ class PointingWCSTest(MPITestCase):
         hits_per_pixel = data.comm.ngroups * len(data.obs[0].all_detectors)
         expected = np.zeros_like(flat_hits)
         expected[nonzero] = hits_per_pixel
-        np.testing.assert_array_equal(
-            flat_hits,
-            expected,
-        )
+        np.testing.assert_array_equal(flat_hits, expected)
 
     def test_wcs(self):
         # Test basic creation of WCS projections and plotting
@@ -196,14 +201,20 @@ class PointingWCSTest(MPITestCase):
 
                 self.assertFalse(pixels.auto_bounds)
                 self.assertTrue(pixels.center == center)
-                self.assertTrue(pixels.resolution == (0.02 * u.degree, 0.02 * u.degree))
+                self.assertTrue(
+                    pixels.resolution == (0.02 * u.degree, 0.02 * u.degree)
+                )
                 self.assertTrue(pixels.dimensions == self.proj_dims)
-                self.assertTrue(pixels.dimensions[0] == pixels.wcs_shape[0])
-                self.assertTrue(pixels.dimensions[1] == pixels.wcs_shape[1])
+                self.assertTrue(pixels.dimensions[0] == pixels.wcs_shape[1])
+                self.assertTrue(pixels.dimensions[1] == pixels.wcs_shape[0])
 
-                # Note, increasing resolution will leave some pixels un-hit, but
-                # the check_hits() helper function will only check pixels with >0 hits
-                pixels.resolution = (0.01 * u.degree, 0.01 * u.degree)
+                # Note, increasing resolution will leave some pixels
+                # un-hit, but the check_hits() helper function will
+                # only check pixels with >0 hits. Don't use exactly
+                # double resolution or our synthetic pointing only hits
+                # pixel boundaries and rounding errors cause sporadic
+                # unit test failures.
+                pixels.resolution = (0.012 * u.degree, 0.012 * u.degree)
                 pixels.center = ()
                 pixels.dimensions = ()
                 pixels.auto_bounds = True
@@ -214,9 +225,10 @@ class PointingWCSTest(MPITestCase):
                     data,
                 )
 
-                self.assertTrue(pixels.resolution == (0.01 * u.degree, 0.01 * u.degree))
+                self.assertTrue(
+                    pixels.resolution == (0.012 * u.degree, 0.012 * u.degree)
+                )
                 self.assertTrue(pixels.auto_bounds)
-
                 close_data(data)
                 if self.comm is not None:
                     self.comm.barrier()
@@ -227,11 +239,11 @@ class PointingWCSTest(MPITestCase):
             rank = self.comm.rank
 
         # Test several projections
-        resolution = 0.1 * u.degree
+        resolution = self.reso
 
         for proj in ["CAR"]:
             # Create fake observing of a small patch
-            data = create_ground_data(self.comm)
+            data = create_ground_data(self.comm, sample_rate=self.fsample)
 
             # Simple detector pointing
             detpointing_radec = ops.PointingDetectorSimple(
@@ -434,17 +446,18 @@ class PointingWCSTest(MPITestCase):
             if data.comm.world_rank == 0:
                 plot_wcs_maps(mapfile=skyfile)
 
+        nrow, ncol = pixels.wcs_shape
         if azel:
             # Simulating a drone near the center
             px = np.array(
-                [[int(0.5 * pixels.pix_lat), int(0.5 * pixels.pix_lon)]],
+                [[int(0.5 * ncol), int(0.5 * nrow)]],
                 dtype=np.float64,
             )
         else:
             # Use this overall projection window to determine our source
             # movement.  The source starts at the center of the projection.
             px = np.array(
-                [[int(0.6 * pixels.pix_lat), int(0.2 * pixels.pix_lon)]],
+                [[int(0.6 * ncol), int(0.2 * nrow)]],
                 dtype=np.float64,
             )
         source_start = pixels.wcs.wcs_pix2world(px, 0)
@@ -563,11 +576,13 @@ class PointingWCSTest(MPITestCase):
             rank = self.comm.rank
 
         # Test several projections
-        resolution = 0.02 * u.degree
+        resolution = self.reso
 
         for proj in ["TAN"]:
             # Create fake observing of a small patch
-            data = create_ground_data(self.comm, pixel_per_process=10)
+            data = create_ground_data(
+                self.comm, sample_rate=self.fsample, pixel_per_process=10
+            )
 
             # Create source motion and simulated detector data.
             dbgdir = None
@@ -665,11 +680,13 @@ class PointingWCSTest(MPITestCase):
             rank = self.comm.rank
 
         # Test several projections
-        resolution = 0.02 * u.degree
+        resolution = self.reso
 
         for proj in ["SFL"]:
             # Create fake observing of a small patch
-            data = create_ground_data(self.comm, pixel_per_process=10)
+            data = create_ground_data(
+                self.comm, sample_rate=self.fsample, pixel_per_process=10
+            )
 
             # We are going to hack the boresight pointing so that the RA/DEC simulated
             # pointing is treated as Az/El.  This means that the scan pattern will not
