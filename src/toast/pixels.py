@@ -1389,7 +1389,7 @@ class PixelData(AcceleratorObject):
                         ].T
         else:
             # No luck, write serially from root process
-            if use_mpi:
+            if use_mpi and not force_serial:
                 # MPI is enabled, but we are not using it.  Warn the user.
                 log.warning_rank(
                     f"h5py not built with MPI support.  Writing {path} in serial mode.",
@@ -1661,20 +1661,27 @@ class PixelData(AcceleratorObject):
                 funits = self.units
             if funits != self.units:
                 fscale = unit_conversion(funits, self.units)
-
             if nside_map != nside:
                 errors += f"Wrong NSide: {path} has {nside_map}, expected {nside}\n"
             map_nnz = h[1].header["tfields"]
-            if map_nnz != self.n_value:
-                errors += f"Wrong number of columns: {path} has {map_nnz}, "
-                errors += f"expected {self.n_value}\n"
             h.close()
+            if self.n_value == 2:
+                if map_nnz < 3:
+                    errors += f"Wrong number of columns: {path} has {map_nnz}, "
+                    errors += f"expected at least 3\n"
+                # Skip I and read QU
+                field = (1, 2)
+            else:
+                if map_nnz < self.n_value:
+                    errors += f"Wrong number of columns: {path} has {map_nnz}, "
+                    errors += f"expected at least {self.n_value}\n"
+                field = tuple(np.arange(self.n_value))
             if len(errors) != 0:
                 raise RuntimeError(errors)
             # Now read the map
             fdata = hp.read_map(
                 path,
-                field=tuple([x for x in range(self.n_value)]),
+                field=field,
                 dtype=[self.dtype for x in range(self.n_value)],
                 memmap=True,
                 nest=nest,
