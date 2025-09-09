@@ -173,6 +173,12 @@ class SimGroundTest(MPITestCase):
         close_data(data)
 
     def test_qpoint(self):
+        try:
+            import qpoint
+        except Exception:
+            print("qpoint not importable, skipping test")
+            return
+
         # Slow sampling
         fp = fake_hexagon_focalplane(
             n_pix=self.npix,
