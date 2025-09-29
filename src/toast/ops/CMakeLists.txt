@@ -31,6 +31,7 @@ install(FILES
     signal_diff_noise_model.py
     gainscrambler.py
     pointing.py
+    pointing_detector_fp.py
     interpolate_healpix.py
     scan_healpix.py
     scan_healpix_detector.py
@@ -71,6 +72,7 @@ install(FILES
     yield_cut.py
     azimuth_intervals.py
     calibrate.py
+    demod_common_mode.py
     DESTINATION ${PYTHON_SITE}/toast/ops
 )
 

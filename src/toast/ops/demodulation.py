@@ -13,6 +13,7 @@ from astropy import units as u
 from astropy.table import QTable
 from scipy.signal import fftconvolve, firwin
 
+from .. import qarray as qa
 from ..data import Data
 from ..instrument import Focalplane, Telescope
 from ..intervals import IntervalList
@@ -74,14 +75,6 @@ class Demodulate(Operator):
     )
 
     hwp_angle = Unicode(defaults.hwp_angle, help="Observation shared key for HWP angle")
-
-    azimuth = Unicode(defaults.azimuth, help="Observation shared key for Azimuth")
-
-    elevation = Unicode(defaults.elevation, help="Observation shared key for Elevation")
-
-    boresight = Unicode(
-        defaults.boresight_radec, help="Observation shared key for boresight"
-    )
 
     det_data = Unicode(
         defaults.det_data,
@@ -281,7 +274,7 @@ class Demodulate(Operator):
             # Create a new observation to hold the demodulated and downsampled data
 
             demod_telescope = self._demodulate_telescope(obs, all_dets)
-            demod_times = self._demodulate_times(obs)
+            demod_all_samples = self._demodulated_samples(obs)
             demod_detsets = self._demodulate_detsets(obs, all_dets)
             demod_sample_sets = self._demodulate_sample_sets(obs)
             demod_process_rows = obs.dist.process_rows
@@ -290,7 +283,7 @@ class Demodulate(Operator):
             demod_obs = Observation(
                 obs.comm,
                 demod_telescope,
-                demod_times.size,
+                demod_all_samples,
                 name=demod_name,
                 uid=name_UID(demod_name),
                 session=obs.session,
@@ -310,14 +303,6 @@ class Demodulate(Operator):
             for det in local_dets:
                 for prefix in self.prefixes:
                     demod_dets.append(f"{prefix}_{det}")
-            n_local = demod_obs.n_local_samples
-
-            demod_obs.shared.create_column(self.times, (n_local,))
-            demod_obs.shared[self.times].set(demod_times, offset=(0,), fromrank=0)
-            demod_obs.shared.create_column(self.boresight, (n_local, 4))
-            demod_obs.shared.create_column(
-                self.shared_flags, (n_local,), dtype=np.uint8
-            )
 
             self._demodulate_shared_data(obs, demod_obs)
 
@@ -334,7 +319,6 @@ class Demodulate(Operator):
 
             self._demodulate_flags(obs, demod_obs, local_dets, wkernel, offset)
             self._demodulate_signal(data, obs, demod_obs, local_dets, lowpass)
-            self._demodulate_pointing(data, obs, demod_obs, local_dets, lowpass, offset)
             self._demodulate_noise(
                 obs, demod_obs, local_dets, fsample, hwp_rate, lowpass
             )
@@ -421,31 +405,70 @@ class Demodulate(Operator):
         return demod_telescope
 
     @function_timer
-    def _demodulate_times(self, obs):
-        """Downsample timestamps"""
-        times = obs.shared[self.times].data.copy()
-        if self.nskip != 1:
-            offset = obs.local_index_offset
-            times = np.array(times[offset % self.nskip :: self.nskip])
-        return times
+    def _demodulated_samples(self, obs):
+        """Compute number of samples in the demodulated observation."""
+        n_all = None
+        if obs.comm_row_rank == 0:
+            # First process row gathers the size of sample slices to the first process
+            off = obs.local_index_offset % self.nskip
+            slc = slice(off, None, self.nskip)
+            n_local = len(obs.shared[self.times].data[slc])
+            if obs.comm_row is None:
+                n_all = n_local
+            else:
+                n_all = obs.comm_row.reduce(n_local, op=MPI.SUM, root=0)
+        if obs.comm.comm_group is not None:
+            # Broadcast result to the whole group
+            n_all = obs.comm.comm_group.bcast(n_all, root=0)
+        return n_all
 
     @function_timer
     def _demodulate_shared_data(self, obs, demod_obs):
         """Downsample shared data"""
-        n_local = demod_obs.n_local_samples
-        for key in self.azimuth, self.elevation, self.hwp_angle:
-            if key is None:
-                continue
-            values = obs.shared[key].data.copy()
-            if self.nskip != 1:
-                offset = obs.local_index_offset
-                values = np.array(values[offset % self.nskip :: self.nskip])
-            demod_obs.shared.create_column(key, (n_local,))
-            demod_obs.shared[key].set(
-                values,
-                offset=(0,),
-                fromrank=0,
-            )
+        for field in obs.shared.keys():
+            shobj = obs.shared[field]
+            commtype = obs.shared.comm_type(field)
+            if commtype == "group":
+                # Using full group communicator, just copy to new obs.
+                demod_obs.shared.assign_mpishared(field, shobj, commtype)
+            elif commtype == "row":
+                # Shared in the sample direction (per-detector object like a beam,
+                # bandpass, etc).  This means that downsampling does not effect the
+                # shared object.  Just copy to the new obs.
+                demod_obs.shared.assign_mpishared(field, shobj, commtype)
+            elif commtype == "column":
+                # Shared in the detector direction.
+                # Set the data on one process
+                if obs.comm_col_rank == 0:
+                    off = obs.local_index_offset % self.nskip
+                    slc = slice(off, None, self.nskip)
+                    values = np.ascontiguousarray(obs.shared[field].data[slc])
+                    n_samp = len(values)
+                else:
+                    n_samp = None
+                    values = None
+
+                # Data type
+                dtype = shobj.dtype
+
+                # Downsampled shape
+                if obs.comm_col is not None:
+                    n_samp = obs.comm_col.bcast(n_samp, root=0)
+                shp = [n_samp]
+                shp.extend(shobj.shape[1:])
+                shp = tuple(shp)
+
+                # Create the object and set
+                demod_obs.shared.create_column(
+                    field,
+                    shape=shp,
+                    dtype=dtype,
+                )
+                demod_obs.shared[field].set(values, fromrank=0)
+            else:
+                msg = "Only shared objects using the group, row, and column "
+                msg += "communicators can be demodulated"
+                raise RuntimeError(msg)
         return
 
     @function_timer
@@ -628,22 +651,6 @@ class Demodulate(Operator):
         return
 
     @function_timer
-    def _demodulate_pointing(self, data, obs, demod_obs, dets, lowpass, offset):
-        """demodulate pointing matrix"""
-
-        # Pointing matrix is now computed on the fly.  We only need to
-        # demodulate the boresight quaternions
-
-        quats = obs.shared[self.boresight].data
-        demod_obs.shared[self.boresight].set(
-            np.array(quats[offset % self.nskip :: self.nskip]),
-            offset=(0, 0),
-            fromrank=0,
-        )
-
-        return
-
-    @function_timer
     def _demodulate_noise(
         self,
         obs,
@@ -728,13 +735,9 @@ class Demodulate(Operator):
 
     def _requires(self):
         req = {
-            "shared": [self.times, self.boresight],
+            "shared": [self.times],
             "detdata": [self.det_data],
         }
-        if self.shared_flags is not None:
-            req["shared"].append(self.shared_flags)
-        if self.boresight_azel is not None:
-            req["shared"].append(self.boresight_azel)
         if self.det_flags is not None:
             req["detdata"].append(self.det_flags)
         return req
@@ -763,6 +766,21 @@ class StokesWeightsDemod(Operator):
 
     single_precision = Bool(False, help="If True, use 32bit float in output")
 
+    detector_pointing_in = Instance(
+        klass=Operator,
+        allow_none=True,
+        help="Pointing operator in the native Q/U frame, typically az/el.  "
+        "Must be set if `detector_pointing_out` is set.  Has no effect if "
+        " `detector_pointing_out` is not set.",
+    )
+
+    detector_pointing_out = Instance(
+        klass=Operator,
+        allow_none=True,
+        help="Pointing operator for the desired frame, typically RA/Dec.  "
+        "Requires `detector_pointing_in` to be set.",
+    )
+
     @traitlets.validate("mode")
     def _check_mode(self, proposal):
         mode = proposal["value"]
@@ -770,6 +788,91 @@ class StokesWeightsDemod(Operator):
             msg = f"Invalid mode (must be one of {self.allowed_modes})"
             raise traitlets.TraitError(msg)
         return mode
+
+    @traitlets.validate("detector_pointing_in")
+    def _check_detector_pointing_in(self, proposal):
+        detpointing = proposal["value"]
+        if detpointing is not None:
+            if not isinstance(detpointing, Operator):
+                raise traitlets.TraitError(
+                    "detector_pointing should be an Operator instance"
+                )
+            # Check that this operator has the traits we expect
+            for trt in [
+                "view",
+                "boresight",
+                "shared_flags",
+                "shared_flag_mask",
+                "det_mask",
+                "quats",
+                "coord_in",
+                "coord_out",
+            ]:
+                if not detpointing.has_trait(trt):
+                    msg = f"detector_pointing operator should have a '{trt}' trait"
+                    raise traitlets.TraitError(msg)
+        return detpointing
+
+    @traitlets.validate("detector_pointing_out")
+    def _check_detector_pointing_out(self, proposal):
+        detpointing = proposal["value"]
+        if detpointing is not None:
+            if not isinstance(detpointing, Operator):
+                raise traitlets.TraitError(
+                    "detector_pointing should be an Operator instance"
+                )
+            # Check that this operator has the traits we expect
+            for trt in [
+                "view",
+                "boresight",
+                "shared_flags",
+                "shared_flag_mask",
+                "det_mask",
+                "quats",
+                "coord_in",
+                "coord_out",
+            ]:
+                if not detpointing.has_trait(trt):
+                    msg = f"detector_pointing operator should have a '{trt}' trait"
+                    raise traitlets.TraitError(msg)
+        return detpointing
+
+    @function_timer
+    def _get_delta(self, data, ob, det):
+        """Get the polarization angle in the input and output
+        frames to rotate Q and U accordingly
+
+        """
+        if self.detector_pointing_out is None:
+            return None
+
+        if det.startswith("demod4r") or det.startswith("demod4i"):
+            # Get input and output detector pointing
+            ob_data = data.select(obs_name=ob.name)
+            # detector pointing will short-circuit if detdata already has the required key
+            reset = self.detector_pointing_in.quats == self.detector_pointing_out.quats
+            if reset and self.detector_pointing_in.quats in ob_data.obs[0].detdata:
+                del ob_data.obs[0].detdata[self.detector_pointing_in.quats]
+            # Get input pointing
+            self.detector_pointing_in.apply(ob_data, detectors=[det])
+            quats_in = ob_data.obs[0].detdata[self.detector_pointing_in.quats][det]
+            psi_in = qa.to_iso_angles(quats_in)[2]
+            if reset and self.detector_pointing_out.quats in ob_data.obs[0].detdata:
+                del ob_data.obs[0].detdata[self.detector_pointing_out.quats]
+            # Get output pointing
+            self.detector_pointing_out.apply(ob_data, detectors=[det])
+            quats_out = ob_data.obs[0].detdata[self.detector_pointing_out.quats][det]
+            psi_out = qa.to_iso_angles(quats_out)[2]
+            if reset:
+                # Purge the quaternions to avoid confusion later
+                del ob_data.obs[0].detdata[self.detector_pointing_out.quats]
+            # Get the difference in position angle
+            delta = psi_out - psi_in
+            delta = delta[:, np.newaxis]
+        else:
+            delta = None
+
+        return delta
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -779,6 +882,11 @@ class StokesWeightsDemod(Operator):
         log = Logger.get()
 
         nnz = len(self.mode)
+
+        if self.detector_pointing_in is None and self.detector_pointing_out is not None:
+            raise RuntimeError(
+                "You must set the input detector pointing with output pointing"
+            )
 
         if self.single_precision:
             dtype = np.float32
@@ -823,15 +931,32 @@ class StokesWeightsDemod(Operator):
                 else:
                     eta = 1.0
 
+                # Check if we need to rotate Q/U weights between reference frames
+                delta = self._get_delta(data, obs, det)
+
                 if det.startswith("demod0"):
                     # Stokes I only
                     weights[det] = i_weights
                 elif det.startswith("demod4r"):
                     # Stokes Q only
-                    weights[det] = q_weights * eta
+                    if delta is None:
+                        weights[det] = q_weights * eta
+                    else:
+                        # Q' = Qcos(2psi) + Usin(2psi)
+                        weights[det] = (
+                            np.cos(2 * delta) * q_weights
+                            + np.sin(2 * delta) * u_weights
+                        ) * eta
                 elif det.startswith("demod4i"):
                     # Stokes U only
-                    weights[det] = u_weights * eta
+                    if delta is None:
+                        weights[det] = u_weights * eta
+                    else:
+                        # U' = Ucos(2psi) - Qsin(2psi)
+                        weights[det] = (
+                            np.cos(2 * delta) * u_weights
+                            - np.sin(2 * delta) * q_weights
+                        ) * eta
                 else:
                     # Not an I/Q/U pseudo detector
                     weights[det] = no_weights

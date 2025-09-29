@@ -14,6 +14,7 @@ from .copy import Copy
 from .crosslinking import CrossLinking
 from .delete import Delete
 from .demodulation import Demodulate, StokesWeightsDemod
+from .demod_common_mode import DemodCommonModeFilter
 from .elevation_noise import ElevationNoise
 from .fill_gaps import FillGaps
 from .filterbin import FilterBin, combine_observation_matrix
@@ -48,6 +49,7 @@ from .pixels_healpix import PixelsHealpix
 from .pixels_wcs import PixelsWCS
 from .pointing import BuildPixelDistribution
 from .pointing_detector import PointingDetectorSimple
+from .pointing_detector_fp import PointingDetectorFP
 from .polyfilter import CommonModeFilter, PolyFilter, PolyFilter2D
 from .reset import Reset
 from .run_spt3g import RunSpt3g
