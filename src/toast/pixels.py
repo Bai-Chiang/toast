@@ -1,15 +1,17 @@
-# Copyright (c) 2015-2024 by the parties listed in the AUTHORS file.
+# Copyright (c) 2015-2025 by the parties listed in the AUTHORS file.
 # All rights reserved.  Use of this source code is governed by
 # a BSD-style license that can be found in the LICENSE file.
 
 import os
+from datetime import datetime
 
-import numpy as np
-import healpy as hp
 import h5py
+import healpy as hp
+import numpy as np
 from astropy import units as u
 from pshmem.utils import mpi_data_type
 
+from . import __version__
 from ._libtoast import global_to_local as libtoast_global_to_local
 from .accelerator import (
     AcceleratorObject,
@@ -26,6 +28,9 @@ from .accelerator import (
 from .dist import distribute_uniform
 from .io import have_hdf5_parallel
 from .mpi import MPI, use_mpi
+from .pixels_io_healpix import collect_healpix_submaps
+from .pixels_io_utils import filename_is_fits, filename_is_hdf5
+from .pixels_io_wcs import broadcast_image, collect_wcs_submaps, read_wcs, write_wcs
 from .timing import GlobalTimers, function_timer
 from .utils import (
     AlignedF32,
@@ -42,9 +47,6 @@ from .utils import (
     memreport,
     unit_conversion,
 )
-from .pixels_io_healpix import collect_healpix_submaps
-from .pixels_io_utils import filename_is_fits, filename_is_hdf5
-from .pixels_io_wcs import collect_wcs_submaps, broadcast_image, write_wcs, read_wcs
 
 
 class PixelDistribution(AcceleratorObject):
@@ -1175,6 +1177,7 @@ class PixelData(AcceleratorObject):
         comm_bytes=10000000,
         report_memory=False,
         single_precision=False,
+        extra_header=None,
     ):
         """Write distributed PixelData to a WCS file.
 
@@ -1192,6 +1195,7 @@ class PixelData(AcceleratorObject):
                 the root node just before writing out the map.
             single_precision (bool): If True, write floats and integers in single
                 precision.
+            extra_header (dict): Additional metadata to include with the map
 
         Returns:
             None
@@ -1219,7 +1223,14 @@ class PixelData(AcceleratorObject):
             if report_memory:
                 mem = memreport(msg="(root node)", silent=True)
                 log.info(f"About to write {path}:  {mem}")
-            write_wcs(path, image, dist.wcs, self.units, dtype=dtype)
+            write_wcs(
+                path,
+                image,
+                dist.wcs,
+                self.units,
+                dtype=dtype,
+                extra_header=extra_header,
+            )
         del image
 
     def _write_healpix_fits(
@@ -1228,6 +1239,7 @@ class PixelData(AcceleratorObject):
         comm_bytes=10000000,
         report_memory=False,
         single_precision=False,
+        extra_header=None,
     ):
         """Write distributed PixelData to a healpix FITS file.
 
@@ -1238,6 +1250,7 @@ class PixelData(AcceleratorObject):
                 the root node just before writing out the map.
             single_precision (bool): If True, write floats and integers in single
                 precision.
+            extra_header (dict): Additional metadata to include with the map
 
         Returns:
             None
@@ -1280,6 +1293,15 @@ class PixelData(AcceleratorObject):
                 mem = memreport(msg="(root node)", silent=True)
                 log.info(f"About to write {path}:  {mem}")
             extra = [(f"TUNIT{x}", f"{funits}") for x in range(self.n_value)]
+            if extra_header is not None:
+                for key, value in extra_header.items():
+                    try:
+                        value, comment = value
+                        # key, value, comment format
+                        extra.append((key, value, comment))
+                    except (TypeError, ValueError):
+                        # key, value format
+                        extra.append((key, value))
             hp.write_map(
                 path,
                 fview,
@@ -1300,6 +1322,7 @@ class PixelData(AcceleratorObject):
         report_memory=False,
         single_precision=False,
         force_serial=True,
+        extra_header=None,
     ):
         """Write distributed PixelData to a healpix HDF5 file.
 
@@ -1312,6 +1335,7 @@ class PixelData(AcceleratorObject):
                 precision.
             force_serial (bool): If True, use serial I/O, even if the HDF5
                 implementation is built with MPI.
+            extra_header (dict): Additional metadata to include with the map
 
         Returns:
             None
@@ -1351,7 +1375,10 @@ class PixelData(AcceleratorObject):
             allowners = np.zeros_like(owners)
             dist.comm.Allreduce(owners, allowners, op=MPI.MIN)
 
-        header = {}
+        if extra_header is None:
+            header = {}
+        else:
+            header = extra_header
         if nest:
             header["ORDERING"] = "NESTED"
         else:
@@ -1449,7 +1476,11 @@ class PixelData(AcceleratorObject):
                             dset[:, first:last] = recvbuffer[i, :, 0 : last - first]
 
                     for key, value in header.items():
-                        dset.attrs[key] = value
+                        try:
+                            value, comment = value
+                            dset.attrs[key] = value
+                        except (TypeError, ValueError):
+                            dset.attrs[key] = value
             else:
                 # All others wait for their turn to send
                 if sendbuffer is not None:
@@ -1462,6 +1493,7 @@ class PixelData(AcceleratorObject):
         report_memory=False,
         single_precision=False,
         force_serial=True,
+        extra_header=None,
     ):
         """Write distributed PixelData to a healpix file.
 
@@ -1480,6 +1512,7 @@ class PixelData(AcceleratorObject):
                 precision.
             force_serial (bool): If True, use serial I/O, even if the HDF5
                 implementation is built with MPI.
+            extra_header (dict): Additional metadata to include with the map
 
         Returns:
             None
@@ -1491,6 +1524,7 @@ class PixelData(AcceleratorObject):
                 comm_bytes=comm_bytes,
                 report_memory=report_memory,
                 single_precision=single_precision,
+                extra_header=extra_header,
             )
         elif filename_is_hdf5(path):
             self._write_healpix_hdf5(
@@ -1499,6 +1533,7 @@ class PixelData(AcceleratorObject):
                 report_memory=report_memory,
                 single_precision=single_precision,
                 force_serial=force_serial,
+                extra_header=extra_header,
             )
         else:
             msg = f"Could not determine file type for '{path}'"
@@ -1512,6 +1547,7 @@ class PixelData(AcceleratorObject):
         report_memory=False,
         single_precision=False,
         force_serial=True,
+        extra_header=None,
     ):
         """Write distributed PixelData to a file.
 
@@ -1534,12 +1570,22 @@ class PixelData(AcceleratorObject):
                 precision.
             force_serial (bool): If True, use serial I/O, even if the HDF5
                 implementation is built with MPI.
+            extra_header (dict): Additional metadata to include with the map
 
         Returns:
             None
 
         """
         dist = self.distribution
+
+        # Set up basic header information
+        if extra_header is None:
+            extra_header = {}
+        extra_header["CREATED"] = (
+            datetime.utcnow().timestamp(),
+            "Creation time [UTC]",
+        )
+        extra_header["VERSION"] = (__version__, "TOAST version")
 
         # Check if we have WCS information
         if hasattr(dist, "wcs"):
@@ -1548,6 +1594,7 @@ class PixelData(AcceleratorObject):
                 comm_bytes=comm_bytes,
                 report_memory=report_memory,
                 single_precision=single_precision,
+                extra_header=extra_header,
             )
         elif hasattr(dist, "nest"):
             self._write_healpix(
@@ -1556,6 +1603,7 @@ class PixelData(AcceleratorObject):
                 report_memory=report_memory,
                 single_precision=single_precision,
                 force_serial=force_serial,
+                extra_header=extra_header,
             )
         else:
             msg = "Could not determine pixelization type.  PixelDistribution"
