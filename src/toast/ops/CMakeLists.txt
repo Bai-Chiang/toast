@@ -74,6 +74,7 @@ install(FILES
     azimuth_intervals.py
     calibrate.py
     demod_common_mode.py
+    detrend.py
     DESTINATION ${PYTHON_SITE}/toast/ops
 )
 
