@@ -315,7 +315,7 @@ int toast::atm_sim_observe(
         std::vector <int64_t> last_ind(3);
         std::vector <double> last_nodes(8);
 
-        # pragma omp for schedule(dynamic, 1)
+        # pragma omp for schedule(static, 100)
         for (size_t i = 0; i < nsamp; ++i) {
             // # pragma omp flush(error)
             // if (error) continue;

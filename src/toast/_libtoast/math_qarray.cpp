@@ -733,7 +733,7 @@ void init_math_qarray(py::module & m) {
                 double psi_x;
                 double psi_y;
 
-                #pragma omp for schedule(static)
+                #pragma omp for schedule(static, 100)
                 for (int64_t i = 0; i < n_elem; ++i) {
                     int64_t qf = 4 * i;
                     qtemp[0] = raw_q[qf];
