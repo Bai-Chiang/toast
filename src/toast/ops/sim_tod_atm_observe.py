@@ -167,6 +167,11 @@ class ObserveAtmosphere(Operator):
         group = data.comm.group
         rank = data.comm.group_rank
 
+        print('======================================')
+        print('len(data.obs)')
+        print(len(data.obs))
+        print('======================================')
+
         for ob in data.obs:
             # Get the detectors we are using for this observation
             dets = ob.select_local_detectors(detectors, flagmask=self.det_mask)
@@ -203,6 +208,11 @@ class ObserveAtmosphere(Operator):
 
             ngood_tot = 0
             nbad_tot = 0
+
+            print('======================================')
+            print('len(views)')
+            print(len(views))
+            print('======================================')
 
             gt.stop("ObserveAtmosphere:  per-observation setup")
             for vw in range(len(views)):
