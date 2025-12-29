@@ -231,6 +231,7 @@ class ObserveAtmosphere(Operator):
 
                 for det in dets:
                     gt.start("ObserveAtmosphere:  detector setup")
+                    gt.start("ObserveAtmosphere:  detector flags")
                     flags = None
                     if self.det_flags is not None:
                         flags = (
@@ -241,7 +242,9 @@ class ObserveAtmosphere(Operator):
                             flags |= sh_flags
                     elif sh_flags is not None:
                         flags = sh_flags
+                    gt.stop("ObserveAtmosphere:  detector flags")
 
+                    gt.start("ObserveAtmosphere:  detector good")
                     good = slice(None, None, None)
                     ngood = len(views.detdata[self.det_data][vw][det])
                     if flags is not None:
@@ -251,9 +254,12 @@ class ObserveAtmosphere(Operator):
                     if ngood == 0:
                         continue
                     ngood_tot += ngood
+                    gt.stop("ObserveAtmosphere:  detector good")
 
+                    gt.start("ObserveAtmosphere:  detector good azel")
                     # Detector Az / El quaternions for good samples
                     azel_quat = views.detdata[self.quats_azel][vw][det][good]
+                    gt.stop("ObserveAtmosphere:  detector good azel")
 
                     gt.start("ObserveAtmosphere:  qa.to_iso_angles")
                     # Convert Az/El quaternion of the detector back into
@@ -261,6 +267,7 @@ class ObserveAtmosphere(Operator):
                     theta, phi, _ = qa.to_iso_angles(azel_quat)
                     gt.stop("ObserveAtmosphere:  qa.to_iso_angles")
 
+                    gt.start("ObserveAtmosphere:  stokes weighting")
                     # Stokes weights for observing polarized atmosphere
                     if self.weights is None:
                         weights_I = 1
@@ -277,7 +284,9 @@ class ObserveAtmosphere(Operator):
                             weights_Q = weights[:, ind].copy()
                         else:
                             weights_Q = 0
+                    gt.stop("ObserveAtmosphere:  stokes weighting")
 
+                    gt.start("ObserveAtmosphere:  tmin_det")
                     # Azimuth is measured in the opposite direction
                     # than longitude
                     az = 2 * np.pi - phi
@@ -288,9 +297,11 @@ class ObserveAtmosphere(Operator):
 
                     tmin_det = times[good][0]
                     tmax_det = times[good][-1]
+                    gt.stop("ObserveAtmosphere:  tmin_det")
 
                     # We may be interpolating some of the time samples
 
+                    gt.start("ObserveAtmosphere:  interpolate time samples")
                     if self.sample_rate is None:
                         t_interp = times[good]
                         az_interp = az
@@ -304,10 +315,13 @@ class ObserveAtmosphere(Operator):
                         # we must unwrap it first ...
                         az_interp = np.interp(t_interp, times[good], np.unwrap(az))
                         el_interp = np.interp(t_interp, times[good], el)
+                    gt.stop("ObserveAtmosphere:  interpolate time samples")
 
                     # Integrate detector signal across all slabs at different altitudes
 
+                    gt.start("ObserveAtmosphere:  zeros atmdata")
                     atmdata = np.zeros(t_interp.size, dtype=np.float64)
+                    gt.stop("ObserveAtmosphere:  zeros atmdata")
 
                     gt.stop("ObserveAtmosphere:  detector setup")
                     gt.start("ObserveAtmosphere:  detector AtmSim.observe")
