@@ -167,11 +167,6 @@ class ObserveAtmosphere(Operator):
         group = data.comm.group
         rank = data.comm.group_rank
 
-        print('======================================')
-        print('len(data.obs)')
-        print(len(data.obs))
-        print('======================================')
-
         for ob in data.obs:
             # Get the detectors we are using for this observation
             dets = ob.select_local_detectors(detectors, flagmask=self.det_mask)
@@ -205,14 +200,36 @@ class ObserveAtmosphere(Operator):
 
             # Loop over views
             views = ob.view[self.view]
+            det_flags = views.detdata[self.det_flags]
+            det_data = views.detdata[self.det_data]
+
+            print('======================================')
+            print('views.detdata[self.det_data][0][0][0]')
+            print(views.detdata[self.det_data][0][0][0])
+            det_data[0][0][0] = 1000
+            print('det_data[0][0][0]')
+            print(det_data[0][0][0])
+            print('views.detdata[self.det_data][0][0][0]')
+            print(views.detdata[self.det_data][0][0][0])
+            print('======================================')
+
+            print('======================================')
+            print('views.detdata[self.det_flags][0][0][0]')
+            print(views.detdata[self.det_flags][0][0][0])
+            det_flags[0][0][0] = 11
+            print('det_flags[0][0][0]')
+            print(det_flags[0][0][0])
+            print('views.detdata[self.det_flags][0][0][0]')
+            print(views.detdata[self.det_flags][0][0][0])
+            print('======================================')
 
             ngood_tot = 0
             nbad_tot = 0
 
-            print('======================================')
-            print('len(views)')
-            print(len(views))
-            print('======================================')
+            #print('======================================')
+            #print('len(views)')
+            #print(len(views))
+            #print('======================================')
 
             gt.stop("ObserveAtmosphere:  per-observation setup")
             for vw in range(len(views)):
@@ -240,30 +257,72 @@ class ObserveAtmosphere(Operator):
                 sim_list = data[self.sim][session_name][cur_wind]
 
                 for det in dets:
+                    gt.start("ObserveAtmosphere:  views.detdata")
+                    _a = views.detdata
+                    gt.stop("ObserveAtmosphere:  views.detdata")
+
+                    gt.start("ObserveAtmosphere:  views.detdata[self.det_flags]")
+                    _b = _a[self.det_flags]
+                    gt.stop("ObserveAtmosphere:  views.detdata[self.det_flags]")
+                    gt.start("ObserveAtmosphere:  views.detdata[self.det_flags][vw]")
+                    _c = _b[vw]
+                    gt.stop("ObserveAtmosphere:  views.detdata[self.det_flags][vw]")
+                    gt.start("ObserveAtmosphere:  views.detdata[self.det_flags][vw][det]")
+                    _d = _c[det]
+                    gt.stop("ObserveAtmosphere:  views.detdata[self.det_flags][vw][det]")
+                    gt.start("ObserveAtmosphere:  det_flags[vw][det]")
+                    _e = det_flags[vw][det]
+                    gt.stop("ObserveAtmosphere:  det_flags[vw][det]")
+
+                    gt.start("ObserveAtmosphere:  views.detdata[self.det_data]")
+                    _b = _a[self.det_data]
+                    gt.stop("ObserveAtmosphere:  views.detdata[self.det_data]")
+                    gt.start("ObserveAtmosphere:  views.detdata[self.det_data][vw]")
+                    _c = _b[vw]
+                    gt.stop("ObserveAtmosphere:  views.detdata[self.det_data][vw]")
+                    gt.start("ObserveAtmosphere:  views.detdata[self.det_data][vw][det]")
+                    _d = _c[det]
+                    gt.stop("ObserveAtmosphere:  views.detdata[self.det_data][vw][det]")
+                    gt.start("ObserveAtmosphere:  det_data[vw][det]")
+                    _e = det_data[vw][det]
+                    gt.stop("ObserveAtmosphere:  det_data[vw][det]")
+
                     gt.start("ObserveAtmosphere:  detector setup")
                     gt.start("ObserveAtmosphere:  detector flags")
                     flags = None
                     if self.det_flags is not None:
+                        gt.start("ObserveAtmosphere:  detector flags bitwise_and")
                         flags = (
                             np.array(views.detdata[self.det_flags][vw][det])
                             & self.det_flag_mask
                         )
+                        gt.stop("ObserveAtmosphere:  detector flags bitwise_and")
                         if sh_flags is not None:
+                            gt.start("ObserveAtmosphere:  detector flags bitwise_or")
                             flags |= sh_flags
+                            gt.stop("ObserveAtmosphere:  detector flags bitwise_or")
                     elif sh_flags is not None:
                         flags = sh_flags
                     gt.stop("ObserveAtmosphere:  detector flags")
 
                     gt.start("ObserveAtmosphere:  detector good")
                     good = slice(None, None, None)
+                    gt.start("ObserveAtmosphere:  detector good ngood")
                     ngood = len(views.detdata[self.det_data][vw][det])
+                    gt.stop("ObserveAtmosphere:  detector good ngood")
                     if flags is not None:
+                        gt.start("ObserveAtmosphere:  detector good == 0")
                         good = flags == 0
+                        gt.stop("ObserveAtmosphere:  detector good == 0")
+                        gt.start("ObserveAtmosphere:  detector good sum")
                         ngood = np.sum(good)
+                        gt.stop("ObserveAtmosphere:  detector good sum")
 
                     if ngood == 0:
                         continue
+                    gt.start("ObserveAtmosphere:  detector good ngood_tot")
                     ngood_tot += ngood
+                    gt.stop("ObserveAtmosphere:  detector good ngood_tot")
                     gt.stop("ObserveAtmosphere:  detector good")
 
                     gt.start("ObserveAtmosphere:  detector good azel")
