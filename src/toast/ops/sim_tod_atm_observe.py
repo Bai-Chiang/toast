@@ -255,9 +255,11 @@ class ObserveAtmosphere(Operator):
                     # Detector Az / El quaternions for good samples
                     azel_quat = views.detdata[self.quats_azel][vw][det][good]
 
+                    gt.start("ObserveAtmosphere:  qa.to_iso_angles")
                     # Convert Az/El quaternion of the detector back into
                     # angles from the simulation.
                     theta, phi, _ = qa.to_iso_angles(azel_quat)
+                    gt.stop("ObserveAtmosphere:  qa.to_iso_angles")
 
                     # Stokes weights for observing polarized atmosphere
                     if self.weights is None:
